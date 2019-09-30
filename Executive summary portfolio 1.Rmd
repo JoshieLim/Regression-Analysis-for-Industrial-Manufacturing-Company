@@ -1,0 +1,97 @@
+---
+title: "Executive Summary"
+author: "Jing Heng Lim"
+date: "September 10, 2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+###1. Problem and context
+
+Over the past decade, there were a significant number of workers were injured or killed while working. Hence, it is no stranger to a global industrial manufacturing company that holds over 10,000 worker across the world. Unfortunately, due to a recent accident in South America had placed company into scrutiny. The chief excutive officer of the company needs a solution to this growing crisis from our company. Hence, a model will be build to prevent injuries occur. 
+
+Objective:
+
+1. What is the ideal safety regime for the company basedon injury prevention performance?
+
+2. Is industry experience more important than the safety regime when it comes to prevent injuries?
+
+###2. Data collected
+
+The data was collected with four variables with injuries is the outcome variable (response) and hours (working hours) as a count variables, experience had been categorized into 4 levels, it is coded as 1 ="least experienced", 2="less experienced", 3 = "experienced", 4 = " very experienced" based on overall workers experience and safety had been categorized into certification, certification + 12monthly review, no standardised process and on-site induction.
+
+###3. Justify choosen method
+Several method had been tested in this analysis such as Poisson regression model, Quasi-Poisson model and Negative-Binomial model as they are a reasonable approach for our count data. These model would be able to identify the significant effects of each variables, optimization to reduce injuries occur and it enable to predict future unforseen number of injuries. Through the analysis, we found out the data was overdispersed. However after couple of model fitting Negative-Binomail model (NB_model) approach is the most ideal model compared to others.
+
+Our final NB_model is Injuries ~ Experience + Safety + offset(log(Hours)). The summary of the model is that when there is an increase of 1 worker in experience 2 will reduce approx 0.48 times of injuries, experience 3 will reduce aprrox 1.12 times and experience 4 will reduce approx 1.977 times respectively. For safety procedure, a increase of 1 worker that had safe certification with 12 month review would reduce 0.02 times of injuries. However, no standardised process and on-site induction will increase the number of injuries by 0.24 and 0.36 respectively. 
+
+We are 95% confident that the coefficients value will lies between the confidence intervals below.
+```{r import data ,echo=FALSE,warning=F, cache=FALSE}
+library(tinytex)
+
+setwd("C:/Users/cc/Desktop/Maths/MXB344")
+library(readr)
+injuries <- read.csv("injuries.csv")
+
+# Set Experience into a factor
+injuries$Experience<-as.factor(injuries$Experience)
+```
+```{r message=FALSE,cache=FALSE,echo=FALSE}
+#remove data
+injuries<-data.frame(injuries)
+injuries<-injuries[-19,]
+
+```
+```{r echo=FALSE, warning=FALSE, cache=FALSE}
+library(MASS)
+NB_full_model<- glm.nb(data = injuries, Injuries~Experience*Safety + offset(log(Hours)), link = "log") 
+NB_null_model<- glm.nb(data = injuries, Injuries~ . - Hours+ offset(log(Hours)) , link = "log") 
+
+# Perform backward and forward selection:
+NB_backward_sel<- stepAIC(object = NB_full_model, direction = "backward", trace = 0)
+NB_forward_sel<- stepAIC(object = NB_null_model, direction = "forward", scope = .~.^2, trace = 0)
+```
+```{r echo=FALSE, warning=FALSE, cache=FALSE, message=FALSE}
+
+# Confidence Interval for covariate coefficients
+confint(NB_backward_sel, level=0.95)
+```
+
+###4. Validity and fit of the model
+```{r echo=FALSE, warning=FALSE, cache=FALSE, fig.width=5, fig.height=3}
+# fit training data into model
+fit<- glm.nb( data = injuries, Injuries ~ Experience + offset(log(Hours)), link= "log" )
+
+#### Predict peformance
+# cross-validation
+attach(injuries)
+pred <- as.numeric()
+for(i in 1:length(Injuries)){
+  temp <- data.frame(Injuries=Injuries[-i],Experience=Experience[-i],Hours=Hours[-i],Safety=Safety[-i])
+  fit.cv <- glm.nb( data = temp, Injuries ~ Experience + Safety +offset(log(Hours)), link= "log" )
+  predlp <- predict(fit.cv,newdata=data.frame(Experience=Experience[i], Safety=Safety[i], Hours=Hours[i]))
+  pred[i] <- exp(predlp)+offset(log(Hours[i]))
+}
+
+plot(Injuries,pred)
+points(c(0,400),c(0,400),type="l")
+
+```
+
+To validate our negative binomial GLM, a leave one out corss validation has been implemented. The model validity and fit can be easily justified by the plot. The plot above has been plotted aginast the actual and the predicted number of injuries based on our model. As we can observed that the predicted value are pretty close to the actual value and it shows a linearity between them. Therefore, the model fits perfectly here and it holds a pretty accurate predictability on unforseen number of injuries would occur.
+
+###5. Conclusion
+```{r visualizable data, echo=F, warning=F,  fig.width=5, fig.height=3, cache=FALSE, message=FALSE}
+library(ggplot2)
+library(ggpubr)
+
+plot3<-ggplot(data=injuries,aes(x= Experience, y = Injuries, fill=factor(Safety)))  + 
+  geom_boxplot()+ labs(x= "Safety Procedure", y="Number of Injuries" , fill="Types of Experience")
+
+plot3
+
+```
+
+In conclusion, a certification or a certification with 12 monthly review is recommended as a international standard safety regime for the company. The boxplot shows that safety regime is more important than experiences when it comes to preventing injuries as it tends to has a lower count of injuries throught out 4 level of experience of workers. Furthermore, workers tends to injured themselves when they had no standardised process and on-site induction safety regime. 

@@ -1,0 +1,266 @@
+---
+title: "Regression Analysis for Industrial Manufacturing Company"
+author: "Jing Heng Lim"
+date: "September 6, 2019"
+organization: "Queensland University of Technology"
+output:
+  pdf_document: default
+  html_document: default
+---
+# Background and Objective
+A recent unfortunate accident in South America has put your company's safety record under the microscope. Journalists have been sending your CEO difficult questions about your company's workplace safety practices, which have been identified as highly variable across your network. Perform some analysis on workplace injury data to help inform your company's response to this growing crisis.
+
+From the data the variables are:
+	
+	Injuries - number of injuries in the group 
+	
+	Safety - the safety regime in place for the group 
+	
+	Hours - total hours worked by this group 
+	
+	Experience - the experience level in years of the group
+
+
+```{r import data ,echo=FALSE,warning=F, cache=FALSE}
+library(tinytex)
+
+setwd("C:/Users/cc/Desktop/Maths/MXB344")
+library(readr)
+injuries <- read.csv("injuries.csv")
+
+# Set Experience into a factor
+injuries$Experience<-as.factor(injuries$Experience)
+
+summary(injuries)
+```
+There were 37 data being recorded in this data set. There were 84 worker injured in average while working and the highest injuries were 334 worker injured. Experience and Safety variable (factor) is balanced into group. 
+
+# Exploratary Data
+```{r visualizable data, echo=F, warning=F,  fig.width=10, fig.height=8, cache=FALSE, message=FALSE}
+library(ggplot2)
+library(ggpubr)
+
+safety_labels<-c("Certification","Certification+12month review","No Standardised Process","On-site Induction")
+
+# Experience category accross number of injuries occur
+plot1<-ggplot(data = injuries, aes(x=Experience, y=Injuries, fill= factor(Experience)))+ 
+  geom_col()+ labs(x= "Experience", y = "Number of Injuries", fill="Experience")
+
+plot2<-ggplot(data=injuries,aes(x= Safety, y = Injuries, fill=factor(Safety)))  + 
+  geom_col()+ labs(x= "Safety Procedure", y="Number of Injuries" , fill="Safety ")
+
+plot3<-ggplot(data=injuries,aes(x= Experience, y = Injuries, fill=factor(Safety)))  + 
+  geom_boxplot()+ labs(x= "Safety Procedure", y="Number of Injuries" , fill="Types of Experience")
+
+ggarrange(ggarrange(plot1,plot2,plot3,ncol = 1, nrow = 3))
+
+```
+This box plot shows that worker who had experience 2 and 3 have a higher chance of causing themselves injured. Whereas, worker who sit in Experience4 is less likely getting injured. 
+
+On safety procedure point of view in the second boxplot, no standardised process and on-site induction are not an ideal safety procedure to prevent injuries. From the 3rd boxplot,it indicates that even worker that has a significant amount of experience would most likely injured themselves if a 'formal' safety regime (certification and 12month review) is not implemented.
+
+#Poisson Model Choice
+Poisson generalised linear model would be a perfect start to build a model for our data since our outcomes is a count data. A stepwise selection based on Akaike Information Criterion (AIC) will be implemented to determine the best model for us by including significant variables. Both backward and forward selection were used to find an optimal model.
+```{r echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+library(tidyverse)
+library(MASS)
+attach(injuries)
+
+# Full model of interaction
+full_interaction_model<- glm(data = injuries, Injuries~ Experience*Safety+offset(log(Hours)), family = poisson(link = "log") )
+
+# Full Model with no interaction
+null_model<- glm(data = injuries, Injuries~. - Hours + offset(log(Hours)), family = poisson(link = "log"))
+
+#Perform backward and forward selection
+backward_model<- stepAIC(full_interaction_model, direction ="backward", trace=0)
+forward_model<- stepAIC(null_model, scope = .~.^2, direction = "forward", trace = 0) # Allow 2-way interaction
+```
+
+###Inspect AIC results for both forward and backward model
+
+Posisson backward model:
+```{r}
+formula(backward_model)
+AIC(backward_model)
+```
+Poisson forward model:
+```{r}
+formula(forward_model)
+AIC(forward_model)
+```
+Both backward and forward selection model appears to be the exact same model. We can now inspect the residual plots using the simulation by DHARMa package.
+
+#Checking for any outlier for the Poisson GLM 
+```{r message=FALSE,cache=FALSE,echo=FALSE, warning=F,  fig.width=8, fig.height=5}
+par(mfrow= c(2,2))
+plot(backward_model) 
+
+```
+Based on Cook's distance, it appears that row 19 is an outlier for the model. Hence, it will be removed. 
+
+```{r message=FALSE,cache=FALSE,echo=FALSE}
+#remove data
+injuries<-data.frame(injuries)
+injuries<-injuries[-19,]
+
+```
+
+# Simulate Residuals from the Poisson GLM
+```{r echo=FALSE, warning=FALSE, cache=FALSE}
+library(DHARMa)
+poisson_residuals<-simulateResiduals(backward_model)
+
+#Ploting observed quatile versus expected quatile to assess distribution fit, and predicted value versus standardised residuals for unmodelled pattern in the residuals.
+
+plot(poisson_residuals)
+
+```
+It is clear that overdispersion occer based on QQplot as the distribution between redisuals and expected does not match. 
+
+# Overdispersion Test for Poisson GLM
+```{r echo=FALSE, message=FALSE ,warning=FALSE, cache=FALSE}
+
+library(AER)
+dispersion_test<- dispersiontest(backward_model)
+print(dispersion_test)
+```
+The p-value for the test of dispersion is highly significant (p-value= 0.02289), this indicates that the data is more variable than expected under Poisson GLM model. Hence, it is overdisperse.
+
+Therefore, a Quasi-poisson model will be considered as quasi-likelhood estimation is one way of allowing for overdispersion.
+
+# Quasi-poisson model
+```{r echo=FALSE, warning=FALSE, cache=FALSE}
+quasi_model<- glm(data = injuries, Injuries~. -Hours +offset(log(Hours)), family = quasipoisson)
+summary(quasi_model)
+```
+
+The dispersion parameter is approximately 4.07 in this case which is more than 1, This indicates that overdispersion still occur in the data.
+
+#Chi-square Test for Quasi-poisson model
+
+Chi-sqr test:
+```{r}
+qchisq(0.95, df=quasi_model$df.residual)
+```
+Deviance of Quasi poisson model:
+```{r}
+deviance(quasi_model)
+
+```
+It shows that the deviance of the model is larger than the chi-squared test. Hence, it indicates that the model doesn't fit well form the data. Since, Quasi-poisson does not fit well here. We shall therefore consider implementing a Negative-Binomial model instead, which is more flexible.
+
+# Negative Binomial Model
+Negative binomial model is another modelling count variables and is widely used for over-dispersed count outcome variables. It can be used when the conditional variance exceed the conditional mean [Var(x)>E(x)]. Similar approach from Poisson GLM is used for AIC forward and backward selection. 
+
+##Mean-Variance relationship
+E(x):
+```{r}
+mean_x<-mean(Injuries)
+variance_x<-var(Injuries)
+mean_x
+```
+Var(x):
+```{r}
+variance_x
+```
+Therefore, negative binomial regression can be used for our data since Var(x)>E(x). 
+```{r echo=FALSE, warning=FALSE, cache=FALSE}
+library(MASS)
+NB_full_model<- glm.nb(data = injuries, Injuries~Experience*Safety + offset(log(Hours)), link = "log") 
+NB_null_model<- glm.nb(data = injuries, Injuries~ . - Hours+ offset(log(Hours)) , link = "log") 
+
+# Perform backward and forward selection:
+NB_backward_sel<- stepAIC(object = NB_full_model, direction = "backward", trace = 0)
+NB_forward_sel<- stepAIC(object = NB_null_model, direction = "forward", scope = .~.^2, trace = 0)
+```
+
+##Model Selection 
+Negative-binomial forward model: 
+```{r}
+formula(NB_forward_sel)
+```
+Negative-binomial backward model: 
+```{r}
+formula(NB_backward_sel)
+```
+
+##AIC results for both model
+```{r}
+AIC(NB_forward_sel)
+```
+```{r}
+AIC(NB_backward_sel)
+```
+As we obeserved the AIC results by using Negative-Binomial model (NB) had relatively decreased to AIC = [1] 300.1648 compared to the Poisson and Quassi-Poisson model.
+```{r}
+nb_residuals<-simulateResiduals(NB_backward_sel)
+plot(nb_residuals)
+
+```
+From the QQplot it seems slightly better here, even the points are not well distributed at the tail. However this could probably due to small amount of data that we obtained but theres is definately a better fit compare to previous model. Since the AIC results for forward and backward selection are the same we can pick either as our final model. In this case would be, Injuries ~ Experience + Safety + offset(log(Hours)).
+
+##Scaled deviance test for negative binomial backward selection
+
+Chi-sqr test:
+```{r echo=FALSE, warning=FALSE, cache=FALSE}
+
+# Scaled deviance Test
+qchisq(0.95, NB_backward_sel$df.residual)
+```
+Deviance of Negative-Binomial model
+```{r}
+deviance(NB_backward_sel)
+```
+
+Besides, through scaled deviance test the deviance value (45.69852) is slightly higher than the chi-square dist value (45.69852) this indicates that the data is still slightly under-fit for the model. However, NB definately has a better fit compare to Poisson and Quassi-Poisson. 
+
+
+```{r echo=FALSE, warning=FALSE, cache=FALSE, size="tiny"}
+# Coefficients
+
+summary(NB_backward_sel)
+```
+The increase of 1 worker in experience 2 will reduce approx 0.48 times of injuries, experience 3 will reduce aprrox 1.12 and experience 4 will reduce approx 1.977 respectively. For safety procedure, a increase of 1 worker that had safe certification with 12 month review would reduce 0.02 times of injuries. However, no standardised process and on-site induction will increase the number of injuries by 0.24 and 0.36 respectively. The standard error tell us that we have approximately 0.11-0.13% of variation in our model based on all the variables used.
+
+##Confidence Interval for covariate coefficients
+```{r echo=FALSE, warning=FALSE, cache=FALSE, message=FALSE}
+
+# Confidence Interval for covariate coefficients
+confint(NB_backward_sel, level=0.95)
+
+
+```
+We are 95% confident that the covariates value lies between the 2 values above respectively. 
+
+## Assess the performance of the model and validating the model
+Cross validation of the model by leave one out
+```{r echo=FALSE, warning=FALSE, cache=FALSE, fig.width=10, fig.height=6}
+# fit training data into model
+fit<- glm.nb( data = injuries, Injuries ~ Experience + offset(log(Hours)), link= "log" )
+
+#### Predict peformance
+# cross-validation
+attach(injuries)
+pred <- as.numeric()
+for(i in 1:length(Injuries)){
+  temp <- data.frame(Injuries=Injuries[-i],Experience=Experience[-i],Hours=Hours[-i],Safety=Safety[-i])
+  fit.cv <- glm.nb( data = temp, Injuries ~ Experience + Safety +offset(log(Hours)), link= "log" )
+  predlp <- predict(fit.cv,newdata=data.frame(Experience=Experience[i], Safety=Safety[i], Hours=Hours[i]))
+  pred[i] <- exp(predlp)+offset(log(Hours[i]))
+}
+
+plot(Injuries,pred)
+points(c(0,400),c(0,400),type="l")
+
+```
+
+
+From the plot above, it shows that the predicted injuries and the actual injuries are quite linear. It indicastes that the model holds a high perfomance predictabilty for future unforseen number of injuries that would occur. 
+
+In general, the Possion GLM and Quasi-Poisson were a poor fit to the data, as the data was overdispersed with respect to it. Additionally, the AIC for the best Poisson GLM was 682.1231 and , and the AIC for the best negative binomial GLM was 300.1648, which is substantially lower and indicates the negative binomial is a much better fit to the data.
+
+In conclusion to justify CEO's concerns, a certification or a certification with 12 monthly review is recommended as a international standard safety regime for the company based on the exploratory analysis by plotting number of injuries aginst different safety regime. Futhermore the boxplot shows that safety regime is more important than experiences when it comes to preventing injuries as it tends to has a lower count of injuries throught out 4 level of experience of workers. Furthermore, workers tends to injured themselves when they had no standardised process and on-site induction safety regime. 
+
+
+
